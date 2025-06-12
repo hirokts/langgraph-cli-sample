@@ -4,10 +4,8 @@ import asyncio
 from typing import Annotated
 from rich.console import Console
 from dotenv import load_dotenv
-from langchain_openai import AzureChatOpenAI, ChatOpenAI
-from langgraph.prebuilt import create_react_agent
-from langchain_core.tools import tool
-from pydantic import SecretStr
+from langchain_core.messages import HumanMessage
+from agent import create_agent_graph
 
 # .envファイルから環境変数を読み込み
 load_dotenv()
@@ -15,24 +13,10 @@ load_dotenv()
 console = Console()
 app = typer.Typer()
 
-@tool
-def get_current_time():
-    """現在の時刻を取得します。"""
-    from datetime import datetime
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-@tool
-def calculator(expression: str) -> str:
-    """簡単な数式を計算します。例: '2 + 3' -> '5'"""
-    try:
-        result = eval(expression)
-        return str(result)
-    except Exception as e:
-        return f"計算エラー: {e}"
 
 async def send_message(message: str) -> None:
     """
-    LangGraphのReActエージェントを使用してストリーミングレスポンスを返す
+    LangGraphのStateGraphを使用してストリーミングレスポンスを返す
     """
     # USE_AZURE環境変数でプロバイダーを決定
     use_azure = os.getenv("USE_AZURE", "false").lower() == "true"
@@ -65,28 +49,17 @@ async def send_message(message: str) -> None:
         console.print(f"[dim]  モデル: {os.getenv('LLM_MODEL', 'gpt-4o')}[/dim]")
     console.print()
     
-    # LLMとツールの設定
-    if use_azure:
-        llm = AzureChatOpenAI(
-            model=os.getenv("LLM_MODEL", "gpt-4o"),
-            api_key=SecretStr(os.getenv("AZURE_OPENAI_API_KEY", "")) or None,
-            azure_endpoint=os.getenv("AZURE_ENDPOINT"),
-            azure_deployment=os.getenv("AZURE_OPENAI_API_DEPLOYMENT_ID"),
-            api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-21"),
-            temperature=0,
-            streaming=True
-        )
-    else:
-        llm = ChatOpenAI(
-            model=os.getenv("LLM_MODEL", "gpt-4o"),
-            api_key=SecretStr(os.getenv("OPENAI_API_KEY", "")) or None,
-            temperature=0,
-            streaming=True
-        )
-    tools = [get_current_time, calculator]
+    # StateGraphエージェントの作成
+    agent = create_agent_graph()
+
+    # create_react_agentを使う場合
+    # agent = create_react_agent_graph()
     
-    # ReActエージェントの作成
-    agent = create_react_agent(llm, tools)
+    # 初期状態の設定
+    initial_state = {
+        "messages": [HumanMessage(content=message)],
+        "next_action": "call_model"
+    }
     
     # ストリーミングレスポンスの処理
     console.print("[cyan]🤖 エージェントが思考中...[/cyan]\n")
@@ -94,10 +67,7 @@ async def send_message(message: str) -> None:
     response_started = False
     
     try:
-        async for event in agent.astream_events({"messages": [("user", message)]}, version="v1"):
-            # デバッグ: すべてのイベントをログ出力
-            # console.print(f"[dim]DEBUG: {event.get('event', 'unknown')}[/dim]")
-            
+        async for event in agent.astream_events(initial_state, version="v1"):
             # チャットモデルのストリーミングイベントを処理
             if event.get("event") == "on_chat_model_stream":
                 chunk = event["data"].get("chunk")
