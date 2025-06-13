@@ -61,6 +61,46 @@ OPENAI_API_KEY=your_openai_api_key
 LLM_MODEL=gpt-4o
 ```
 
+## 💾 チェックポインター設定
+
+### SQLite（デフォルト）
+デフォルトでは、セッション状態はSQLiteファイル（`checkpoints.db`）に保存されます：
+
+```bash
+# SQLiteを使用（デフォルト）
+CHECKPOINT_TYPE=sqlite
+```
+
+### PostgreSQL
+より大規模な運用やマルチユーザー環境では、PostgreSQLを使用できます：
+
+```bash
+# PostgreSQLを使用
+CHECKPOINT_TYPE=postgres
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DB=langgraph
+POSTGRES_USER=langgraph_user
+POSTGRES_PASSWORD=langgraph_password
+```
+
+#### Docker ComposeでPostgreSQLを起動
+
+PostgreSQLをDocker Composeで簡単に起動できます：
+
+```bash
+# PostgreSQL起動
+docker-compose up -d postgres
+
+# PostgreSQL停止
+docker-compose down
+
+# ヘルスチェック確認
+docker-compose ps
+```
+
+PostgreSQLが起動したら、`.env`ファイルで`CHECKPOINT_TYPE=postgres`に設定してください。
+
 ## 🛠️ 利用可能なツール
 
 ### 1. 時刻取得ツール (`get_current_time`)

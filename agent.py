@@ -4,6 +4,7 @@ from langchain_openai import AzureChatOpenAI, ChatOpenAI
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from pydantic import SecretStr
@@ -162,25 +163,42 @@ def create_react_agent_graph():
 
 
 def create_checkpointer(db_path: str = "checkpoints.db"):
-    """SQLiteチェックポインターを作成（コンテキストマネージャーを返す）"""
-    import os
-    # 絶対パスに変換
-    abs_db_path = os.path.abspath(db_path)
-    return AsyncSqliteSaver.from_conn_string(abs_db_path)
-
-
-async def get_session_history(checkpointer: AsyncSqliteSaver, session_id: str) -> List[HumanMessage | AIMessage | ToolMessage]:
-    """セッション履歴を取得"""
-    try:
-        # 最新のチェックポイントを取得するため、まずは最新のcheckpoint_idを取得
-        async with checkpointer.conn.execute(
-            "SELECT checkpoint_id FROM checkpoints WHERE thread_id = ? ORDER BY checkpoint_id DESC LIMIT 1",
-            (session_id,)
-        ) as cursor:
-            row = await cursor.fetchone()
-            if not row:
-                return []
+    """チェックポインターを作成（SQLite または PostgreSQL）"""
+    from contextlib import asynccontextmanager
+    
+    checkpoint_type = os.getenv("CHECKPOINT_TYPE", "sqlite").lower()
+    
+    if checkpoint_type == "postgres":
+        # PostgreSQL接続文字列を構築
+        host = os.getenv("POSTGRES_HOST", "localhost")
+        port = os.getenv("POSTGRES_PORT", "5432")
+        db = os.getenv("POSTGRES_DB", "langgraph")
+        user = os.getenv("POSTGRES_USER", "langgraph_user")
+        password = os.getenv("POSTGRES_PASSWORD", "langgraph_password")
         
+        connection_string = f"postgresql://{user}:{password}@{host}:{port}/{db}"
+        
+        @asynccontextmanager
+        async def postgres_checkpointer():
+            async with AsyncPostgresSaver.from_conn_string(connection_string) as checkpointer:
+                # 初回セットアップを実行
+                try:
+                    await checkpointer.setup()
+                except Exception:
+                    # セットアップが既に完了している場合はエラーを無視
+                    pass
+                yield checkpointer
+        
+        return postgres_checkpointer()
+    else:
+        # SQLite (デフォルト)
+        abs_db_path = os.path.abspath(db_path)
+        return AsyncSqliteSaver.from_conn_string(abs_db_path)
+
+
+async def get_session_history(checkpointer, session_id: str) -> List[HumanMessage | AIMessage | ToolMessage]:
+    """セッション履歴を取得（SQLite/PostgreSQL対応）"""
+    try:
         # RunnableConfigを作成して最新のチェックポイントを取得
         config = RunnableConfig(configurable={"thread_id": session_id})
         checkpoint_tuple = await checkpointer.aget_tuple(config)
@@ -200,15 +218,17 @@ async def get_session_history(checkpointer: AsyncSqliteSaver, session_id: str) -
         return []
 
 
-async def list_sessions(checkpointer: AsyncSqliteSaver) -> List[str]:
-    """すべてのセッションIDを取得"""
+async def list_sessions(checkpointer) -> List[str]:
+    """すべてのセッションIDを取得（SQLite/PostgreSQL対応）"""
     try:
-        # データベースから直接thread_idを取得
-        async with checkpointer.conn.execute(
-            "SELECT DISTINCT thread_id FROM checkpoints ORDER BY thread_id"
-        ) as cursor:
-            rows = await cursor.fetchall()
-            return [row[0] for row in rows]
+        # チェックポイントから直接セッション一覧を取得
+        sessions = set()
+        async for checkpoint_tuple in checkpointer.alist(RunnableConfig(configurable={})):
+            if checkpoint_tuple.config and "configurable" in checkpoint_tuple.config:
+                thread_id = checkpoint_tuple.config["configurable"].get("thread_id")
+                if thread_id:
+                    sessions.add(thread_id)
+        return sorted(list(sessions))
     except Exception as e:
         print(f"セッション一覧取得エラー: {e}")
         return []
