@@ -12,4 +12,5 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "langgraph-checkpoint-sqlite>=2.0.10",
     "aiosqlite>=0.21.0",
+    "langgraph-checkpoint-postgres>=2.0.21",
 ]
