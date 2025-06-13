@@ -10,4 +10,6 @@ dependencies = [
     "langgraph>=0.4.8",
     "typer>=0.16.0",
     "python-dotenv>=1.0.0",
+    "langgraph-checkpoint-sqlite>=2.0.10",
+    "aiosqlite>=0.21.0",
 ]

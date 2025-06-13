@@ -1,9 +1,11 @@
 import os
-from typing import TypedDict, List
+from typing import TypedDict, List, Any, Dict
 from langchain_openai import AzureChatOpenAI, ChatOpenAI
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import create_react_agent
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
 from pydantic import SecretStr
 from tools import tools, tool_map
 
@@ -114,7 +116,7 @@ def should_continue(state: AgentState) -> str:
     return state["next_action"]
 
 
-def create_agent_graph():
+def create_agent_graph(checkpointer=None):
     """エージェントグラフを作成"""
     workflow = StateGraph(AgentState)
     
@@ -134,7 +136,7 @@ def create_agent_graph():
     )
     workflow.add_edge("call_tools", "call_model")
     
-    return workflow.compile()
+    return workflow.compile(checkpointer=checkpointer)
 
 
 def create_react_agent_graph():
@@ -157,3 +159,56 @@ def create_react_agent_graph():
             streaming=True
         )
     return create_react_agent(llm, tools)
+
+
+def create_checkpointer(db_path: str = "checkpoints.db"):
+    """SQLiteチェックポインターを作成（コンテキストマネージャーを返す）"""
+    import os
+    # 絶対パスに変換
+    abs_db_path = os.path.abspath(db_path)
+    return AsyncSqliteSaver.from_conn_string(abs_db_path)
+
+
+async def get_session_history(checkpointer: AsyncSqliteSaver, session_id: str) -> List[HumanMessage | AIMessage | ToolMessage]:
+    """セッション履歴を取得"""
+    try:
+        # 最新のチェックポイントを取得するため、まずは最新のcheckpoint_idを取得
+        async with checkpointer.conn.execute(
+            "SELECT checkpoint_id FROM checkpoints WHERE thread_id = ? ORDER BY checkpoint_id DESC LIMIT 1",
+            (session_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if not row:
+                return []
+        
+        # RunnableConfigを作成して最新のチェックポイントを取得
+        config = RunnableConfig(configurable={"thread_id": session_id})
+        checkpoint_tuple = await checkpointer.aget_tuple(config)
+        
+        if checkpoint_tuple and checkpoint_tuple.checkpoint:
+            # チェックポイントから状態を取得
+            checkpoint_dict = dict(checkpoint_tuple.checkpoint)
+            if "channel_values" in checkpoint_dict:
+                channel_values = checkpoint_dict["channel_values"]
+                if isinstance(channel_values, dict) and "messages" in channel_values:
+                    messages = channel_values["messages"]
+                    return messages
+        
+        return []
+    except Exception as e:
+        print(f"セッション履歴取得エラー: {e}")
+        return []
+
+
+async def list_sessions(checkpointer: AsyncSqliteSaver) -> List[str]:
+    """すべてのセッションIDを取得"""
+    try:
+        # データベースから直接thread_idを取得
+        async with checkpointer.conn.execute(
+            "SELECT DISTINCT thread_id FROM checkpoints ORDER BY thread_id"
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [row[0] for row in rows]
+    except Exception as e:
+        print(f"セッション一覧取得エラー: {e}")
+        return []
