@@ -101,14 +101,31 @@ async def send_message(message: str, session_id: Optional[str] = None, show_chec
         console.print("[cyan]🤖 エージェントが思考中...[/cyan]\n")
 
         try:
-            result = await agent.ainvoke(initial_state, config=config)
-
-            # 最後のAIメッセージを取得して表示
-            for message in reversed(result["messages"]):
-                if isinstance(message, AIMessage) and message.content:
-                    console.print("[green]🤖 回答:[/green]")
-                    console.print(message.content)
-                    break
+            response_started = False
+            async for event in agent.astream_events(initial_state, config=config, version="v1"):
+                # チャットモデルのストリーミングイベントを処理
+                if event.get("event") == "on_chat_model_stream":
+                    chunk = event["data"].get("chunk")
+                    if chunk and hasattr(chunk, "content") and chunk.content:
+                        if not response_started:
+                            console.print("[green]🤖 回答:[/green]")
+                            response_started = True
+                        console.print(chunk.content, end="")
+                
+                # ツール実行開始イベント
+                elif event.get("event") == "on_tool_start":
+                    tool_name = event.get("name", "unknown")
+                    tool_input = event["data"].get("input", {})
+                    console.print(f"\n[blue]🔧 ツール実行中: {tool_name}({tool_input})[/blue]")
+                
+                # ツール実行終了イベント
+                elif event.get("event") == "on_tool_end":
+                    tool_name = event.get("name", "unknown")
+                    tool_output = event["data"].get("output", "")
+                    console.print(f"[yellow]✅ ツール結果: {tool_output}[/yellow]")
+            
+            if response_started:
+                console.print()  # 最後に改行
             console.print("[green]✅ 完了[/green]")
 
             # チェックポイント情報の表示（フラグが有効な場合のみ）
@@ -221,15 +238,31 @@ async def send_replay(session_id: str, checkpoint_id: str) -> None:
         console.print("[cyan]🤖 エージェントが思考中...[/cyan]\n")
 
         try:
-            # 結果を取得して表示
-            result = await agent.ainvoke(None, config=config)
-
-            # 最後のAIメッセージを取得して表示
-            for message in reversed(result["messages"]):
-                if isinstance(message, AIMessage) and message.content:
-                    console.print("[green]🤖 回答:[/green]")
-                    console.print(message.content)
-                    break
+            response_started = False
+            async for event in agent.astream_events(None, config=config, version="v1"):
+                # チャットモデルのストリーミングイベントを処理
+                if event.get("event") == "on_chat_model_stream":
+                    chunk = event["data"].get("chunk")
+                    if chunk and hasattr(chunk, "content") and chunk.content:
+                        if not response_started:
+                            console.print("[green]🤖 回答:[/green]")
+                            response_started = True
+                        console.print(chunk.content, end="")
+                
+                # ツール実行開始イベント
+                elif event.get("event") == "on_tool_start":
+                    tool_name = event.get("name", "unknown")
+                    tool_input = event["data"].get("input", {})
+                    console.print(f"\n[blue]🔧 ツール実行中: {tool_name}({tool_input})[/blue]")
+                
+                # ツール実行終了イベント
+                elif event.get("event") == "on_tool_end":
+                    tool_name = event.get("name", "unknown")
+                    tool_output = event["data"].get("output", "")
+                    console.print(f"[yellow]✅ ツール結果: {tool_output}[/yellow]")
+            
+            if response_started:
+                console.print()  # 最後に改行
             console.print("[green]✅ 完了[/green]")
 
         except Exception as e:
